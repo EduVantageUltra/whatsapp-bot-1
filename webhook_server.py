@@ -3,18 +3,33 @@ import anthropic
 import gspread
 import requests
 import json
+import os
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-from config import (
-    ANTHROPIC_API_KEY,
-    GOOGLE_CREDENTIALS_FILE,
-    SHEET_ID,
-    WHATSAPP_ACCESS_TOKEN,
-    WHATSAPP_PHONE_NUMBER_ID,
-    VERIFY_TOKEN
-)
 
 app = Flask(__name__)
+
+# Environment variables se lo — Render pe bhi kaam karega, local pe bhi
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+SHEET_ID = os.environ.get("SHEET_ID")
+WHATSAPP_ACCESS_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN")
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "aero_webhook_2024")
+GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+
+# Agar local hai toh config.py se lo
+if not ANTHROPIC_API_KEY:
+    try:
+        from config import (
+            ANTHROPIC_API_KEY,
+            GOOGLE_CREDENTIALS_FILE,
+            SHEET_ID,
+            WHATSAPP_ACCESS_TOKEN,
+            WHATSAPP_PHONE_NUMBER_ID,
+            VERIFY_TOKEN
+        )
+    except:
+        pass
 
 # Per number conversation history
 conversations = {}
@@ -108,7 +123,6 @@ def get_ai_reply(phone, user_message):
         "content": user_message
     })
 
-    # Last 10 messages rakho only
     if len(conversations[phone]) > 10:
         conversations[phone] = conversations[phone][-10:]
 
@@ -215,15 +229,14 @@ def mark_dnd_in_sheet(phone):
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    """Meta webhook verification"""
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    print(f"\n🔍 Verification attempt — mode: {mode}, token: {token}")
+    print(f"\n🔍 Verification — mode: {mode}, token: {token}")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("✅ Webhook verified successfully!")
+        print("✅ Webhook verified!")
         return challenge, 200
     else:
         print("❌ Verification failed!")
@@ -231,16 +244,14 @@ def verify_webhook():
 
 @app.route("/webhook", methods=["POST"])
 def handle_message():
-    """Incoming WhatsApp message handle karo"""
     data = request.json
-    print(f"\n📨 Incoming webhook data received")
+    print(f"\n📨 Webhook received")
 
     try:
         entry = data.get("entry", [{}])[0]
         changes = entry.get("changes", [{}])[0]
         value = changes.get("value", {})
 
-        # Sirf messages handle karo
         if "messages" not in value:
             return jsonify({"status": "ok"}), 200
 
@@ -248,9 +259,8 @@ def handle_message():
         phone = message["from"]
         msg_type = message["type"]
 
-        # Sirf text messages
         if msg_type != "text":
-            print(f"   ⏭️ Non-text message ignored: {msg_type}")
+            print(f"   ⏭️ Non-text ignored: {msg_type}")
             return jsonify({"status": "ok"}), 200
 
         user_message = message["text"]["body"]
@@ -259,26 +269,21 @@ def handle_message():
         print(f"💬 Message: {user_message}")
         print(f"{'='*45}")
 
-        # DND check
         if phone in dnd_numbers:
             print(f"🚫 DND — ignoring {phone}")
             return jsonify({"status": "ok"}), 200
 
-        # AI reply generate karo
         reply = get_ai_reply(phone, user_message)
-        print(f"🤖 AI Reply: {reply}")
+        print(f"🤖 Reply: {reply}")
 
-        # DND reply check
         if reply.strip().upper() == "DND":
             dnd_numbers.add(phone)
             mark_dnd_in_sheet(phone)
             print(f"🚫 DND marked: {phone}")
             return jsonify({"status": "ok"}), 200
 
-        # Reply bhejo
         send_whatsapp_message(phone, reply)
 
-        # Sheet mein log karo
         sentiment = get_sentiment(user_message)
         log_to_sheet(phone, user_message, reply, sentiment)
 
@@ -294,21 +299,16 @@ def home():
     return """
     <h2>🤖 Aero WhatsApp Bot</h2>
     <p>Status: <b style='color:green'>Running</b></p>
-    <p>Webhook URL: /webhook</p>
+    <p>Webhook: /webhook</p>
     """, 200
 
-# ================================
-# START SERVER
-# ================================
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*50)
     print("🚀 AERO WHATSAPP BOT STARTING...")
     print("="*50)
-    print(f"📡 Local URL: http://localhost:5000")
+    print(f"📡 Port: {port}")
     print(f"🔑 Verify Token: {VERIFY_TOKEN}")
     print(f"📱 Phone Number ID: {WHATSAPP_PHONE_NUMBER_ID}")
-    print(f"💬 Webhook endpoint: /webhook")
-    print("="*50)
-    print("\n⏳ Ngrok URL chahiye Meta ke liye!")
-    print("Doosri PowerShell mein chalao: ngrok http 5000\n")
-    app.run(port=5000, debug=True)
+    print("="*50 + "\n")
+    app.run(host="0.0.0.0", port=port, debug=False)
