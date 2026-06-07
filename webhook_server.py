@@ -9,7 +9,6 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Environment variables se lo — Render pe bhi kaam karega, local pe bhi
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 SHEET_ID = os.environ.get("SHEET_ID")
 WHATSAPP_ACCESS_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN")
@@ -17,7 +16,6 @@ WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "aero_webhook_2024")
 GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 
-# Agar local hai toh config.py se lo
 if not ANTHROPIC_API_KEY:
     try:
         from config import (
@@ -31,11 +29,9 @@ if not ANTHROPIC_API_KEY:
     except:
         pass
 
-# Per number conversation history
 conversations = {}
-
-# DND numbers set
 dnd_numbers = set()
+client_names = {}  # Phone → Name mapping
 
 WA_API_URL = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
 HEADERS = {
@@ -43,9 +39,6 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ================================
-# AI SYSTEM PROMPT
-# ================================
 SYSTEM_PROMPT = """Tu Aero AI Classes ka friendly representative hai — tera naam Aryan hai.
 
 LANGUAGE RULE — SABSE IMPORTANT:
@@ -53,14 +46,30 @@ LANGUAGE RULE — SABSE IMPORTANT:
 - Hindi mein likha → Pure Hindi mein reply
 - English mein likha → Pure English mein reply
 - Hinglish mein likha → Hinglish mein reply
-- Automatically detect kar — kabhi mat poochh ki kaun si language use karein
+- Automatically detect kar — kabhi mat poochh
 
-TONE RULES:
-- Bilkul human jaisi baat kar — chatbot jaisi bilkul nahi
+TONE & RESPECT RULES:
+- Har insaan ko respect de — chahe wo kuch bhi poochhe
+- Bilkul human jaisi baat kar — chatbot jaisi nahi
 - Short messages — 2-3 lines max
 - Friendly aur warm reh, pushy bilkul mat ban
 - Casual reh — formal mat ban
 - Thode emojis use kar — zyada nahi
+- Kabhi bhi kisi ko judge mat kar
+- Sabke saath ek jaisa respectful behavior
+
+HARMFUL CONTENT RULES:
+- Koi bhi illegal ya harmful topic aaye → politely topic change kar
+- Kisi ke baare mein bura mat bol
+- Politics, religion pe seedha comment mat kar
+- Agar koi galat cheez maange → "Yaar, main isme help nahi kar sakta, but AI Classes ke baare mein kuch poochna ho toh batao! 😊"
+- Kabhi aggressive ya rude mat ho — chahe client ho bhi
+
+NAME COLLECTION RULE — BAHUT IMPORTANT:
+- Sabse PEHLE client ka naam poochho — hamesha
+- Pehle message mein naam nahi hai → pehle naam poochho, kuch aur mat poochho
+- Naam mil jaaye → uska naam use karke personal baat karo
+- Ek baar naam mil jaaye → dobara mat poochho
 
 Aero AI Classes ke baare mein:
 - ChatGPT, AI Tools, Business Automation sikhate hain
@@ -68,20 +77,18 @@ Aero AI Classes ke baare mein:
 - Online classes hain
 - Price: Rs.2999/month, Rs.7999/3 months
 - Batch timing: Morning 9am, Evening 7pm
-- Contact: Aryan se directly baat kar sakte hain
 
 Conversation flow:
-1. Greeting → Warm response, poochho kya jaanna chahte hain
-2. Interest show kare → Demo class offer karo
-3. Price pooche → Batao aur value explain karo
-4. Ready ho → Enrollment process batao
-5. Not interested → Politely accept karo
+1. Pehla message → Warmly greet + NAAM POOCHHO
+2. Naam mila → "Nice to meet you [naam]! 😊" + kya jaanna chahte ho poochho
+3. Interest show kare → Demo class offer karo
+4. Price pooche → Batao aur value explain karo
+5. Ready ho → Enrollment process batao
+6. Not interested → Politely accept karo
 
-Agar koi STOP/nahi/mat/band/no/not interested likhe → sirf ek word likho: DND"""
+Agar koi STOP/nahi/mat/band/no/not interested likhe → sirf ek word: DND"""
 
-# ================================
-# GOOGLE SHEET CONNECT
-# ================================
+
 def connect_sheet():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -93,9 +100,7 @@ def connect_sheet():
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_ID).sheet1
 
-# ================================
-# WHATSAPP MESSAGE SEND
-# ================================
+
 def send_whatsapp_message(phone, message):
     payload = {
         "messaging_product": "whatsapp",
@@ -111,9 +116,7 @@ def send_whatsapp_message(phone, message):
         print(f"   ❌ Failed: {result.get('error', {}).get('message', 'Unknown')}")
     return result
 
-# ================================
-# AI REPLY GENERATE
-# ================================
+
 def get_ai_reply(phone, user_message):
     if phone not in conversations:
         conversations[phone] = []
@@ -143,9 +146,7 @@ def get_ai_reply(phone, user_message):
 
     return reply
 
-# ================================
-# SENTIMENT DETECT
-# ================================
+
 def get_sentiment(message):
     msg = message.lower()
     positive_words = [
@@ -163,10 +164,43 @@ def get_sentiment(message):
         return "Negative"
     return "Neutral"
 
-# ================================
-# LOG TO GOOGLE SHEET
-# ================================
-def log_to_sheet(phone, message, reply, sentiment):
+
+def extract_name_from_message(phone, user_message):
+    """
+    Conversation history check karo — agar AI ne naam pucha tha
+    aur client ne short reply diya toh wo naam hai
+    """
+    if phone not in conversations:
+        return None
+
+    history = conversations[phone]
+
+    # Agar 2-4 messages hain — naam pucha gaya hoga
+    if len(history) >= 2:
+        last_bot_msg = None
+        for msg in reversed(history[:-1]):  # Latest bot message dhundo
+            if msg["role"] == "assistant":
+                last_bot_msg = msg["content"].lower()
+                break
+
+        if last_bot_msg and any(w in last_bot_msg for w in
+                                ["naam", "name", "aapka naam", "your name",
+                                 "introduce", "bataiye", "kaun"]):
+            # Client ka reply naam ho sakta hai
+            words = user_message.strip().split()
+            skip_words = [
+                "haan", "nahi", "nhi", "yes", "no", "okay", "ok",
+                "hello", "hi", "hey", "kya", "hai", "kaise", "demo",
+                "price", "kitna", "bata", "classes", "join"
+            ]
+            if (len(words) <= 3 and
+                    not any(w in user_message.lower() for w in skip_words)):
+                return user_message.strip().title()
+
+    return None
+
+
+def log_to_sheet(phone, message, reply, sentiment, name=None):
     try:
         sheet = connect_sheet()
         now = datetime.now()
@@ -183,6 +217,8 @@ def log_to_sheet(phone, message, reply, sentiment):
                     break
 
         if row_found:
+            if name:
+                sheet.update_cell(row_found, 3, name)
             sheet.update_cell(row_found, 11, f"Replied-{sentiment}")
             sheet.update_cell(row_found, 12, f"User: {message[:50]} | Bot: {reply[:50]}")
             sheet.update_cell(row_found, 13, now.strftime("%d-%m-%Y %H:%M"))
@@ -190,7 +226,7 @@ def log_to_sheet(phone, message, reply, sentiment):
             sheet.append_row([
                 now.strftime("%d-%m-%Y"),
                 now.strftime("%H:%M:%S"),
-                "Unknown",
+                name or "Unknown",
                 "+" + phone_clean,
                 "", "", "", "", "", "",
                 f"Replied-{sentiment}",
@@ -198,14 +234,12 @@ def log_to_sheet(phone, message, reply, sentiment):
                 now.strftime("%d-%m-%Y %H:%M")
             ])
 
-        print(f"   📊 Sheet updated — {sentiment}")
+        print(f"   📊 Sheet updated — {sentiment} | Name: {name or 'N/A'}")
 
     except Exception as e:
         print(f"   ⚠️ Sheet error: {e}")
 
-# ================================
-# DND MARK IN SHEET
-# ================================
+
 def mark_dnd_in_sheet(phone):
     try:
         sheet = connect_sheet()
@@ -223,9 +257,6 @@ def mark_dnd_in_sheet(phone):
     except Exception as e:
         print(f"   ⚠️ DND sheet error: {e}")
 
-# ================================
-# WEBHOOK ROUTES
-# ================================
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -241,6 +272,7 @@ def verify_webhook():
     else:
         print("❌ Verification failed!")
         return "Forbidden", 403
+
 
 @app.route("/webhook", methods=["POST"])
 def handle_message():
@@ -273,6 +305,12 @@ def handle_message():
             print(f"🚫 DND — ignoring {phone}")
             return jsonify({"status": "ok"}), 200
 
+        # Naam extract karo reply se pehle
+        name = extract_name_from_message(phone, user_message)
+        if name:
+            client_names[phone] = name
+            print(f"   👤 Name detected: {name}")
+
         reply = get_ai_reply(phone, user_message)
         print(f"🤖 Reply: {reply}")
 
@@ -285,7 +323,8 @@ def handle_message():
         send_whatsapp_message(phone, reply)
 
         sentiment = get_sentiment(user_message)
-        log_to_sheet(phone, user_message, reply, sentiment)
+        saved_name = client_names.get(phone)
+        log_to_sheet(phone, user_message, reply, sentiment, saved_name)
 
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -294,6 +333,7 @@ def handle_message():
 
     return jsonify({"status": "ok"}), 200
 
+
 @app.route("/", methods=["GET"])
 def home():
     return """
@@ -301,6 +341,7 @@ def home():
     <p>Status: <b style='color:green'>Running</b></p>
     <p>Webhook: /webhook</p>
     """, 200
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
