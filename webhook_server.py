@@ -31,7 +31,7 @@ if not ANTHROPIC_API_KEY:
 
 conversations = {}
 dnd_numbers = set()
-client_names = {}  # Phone → Name mapping
+client_names = {}
 
 WA_API_URL = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
 HEADERS = {
@@ -39,7 +39,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-SYSTEM_PROMPT = """Tu Aero AI Classes ka friendly representative hai — tera naam Aryan hai.
+SYSTEM_PROMPT = """Tu TMT Ajmer ka friendly sales representative hai — tera naam Rahul hai.
 
 LANGUAGE RULE — SABSE IMPORTANT:
 - Client jis language mein likhe — USI language mein reply kar
@@ -62,7 +62,7 @@ HARMFUL CONTENT RULES:
 - Koi bhi illegal ya harmful topic aaye → politely topic change kar
 - Kisi ke baare mein bura mat bol
 - Politics, religion pe seedha comment mat kar
-- Agar koi galat cheez maange → "Yaar, main isme help nahi kar sakta, but AI Classes ke baare mein kuch poochna ho toh batao! 😊"
+- Agar koi galat cheez maange → "Bhai, main isme help nahi kar sakta, but TMT bars ke baare mein kuch poochna ho toh zaroor batao! 😊"
 - Kabhi aggressive ya rude mat ho — chahe client ho bhi
 
 NAME COLLECTION RULE — BAHUT IMPORTANT:
@@ -71,20 +71,44 @@ NAME COLLECTION RULE — BAHUT IMPORTANT:
 - Naam mil jaaye → uska naam use karke personal baat karo
 - Ek baar naam mil jaaye → dobara mat poochho
 
-Aero AI Classes ke baare mein:
-- ChatGPT, AI Tools, Business Automation sikhate hain
-- Free demo class available hai
-- Online classes hain
-- Price: Rs.2999/month, Rs.7999/3 months
-- Batch timing: Morning 9am, Evening 7pm
+TMT AJMER — KNOWLEDGE BASE:
 
-Conversation flow:
+COMPANY:
+- Naam: TMT Ajmer
+- Kaam: TMT Steel Bars ki supply aur distribution
+- Location: Ajmer, Rajasthan
+- Representative: Rahul (tu)
+
+PRODUCTS & PRICING:
+- TMT Bars price range: Rs.50,000 - Rs.57,000 per tonne
+- Per kg rate: Rs.50 - Rs.60
+- Grades available:
+  * Fe 500 — standard grade, regular construction
+  * Fe 550 — high strength
+  * Fe 550D — premium grade, earthquake resistant, highly ductile
+- Bulk orders pe special discount milta hai
+- Price daily market ke hisaab se change ho sakti hai
+
+BRANDS AVAILABLE:
+- TATA Tiscon
+- Kamdhenu
+- Aur bhi top brands available hain
+
+WHY TMT AJMER:
+- Competitive pricing — market se better rates
+- Top quality brands
+- Bulk discount available
+- Trusted supplier in Ajmer region
+- Fast delivery
+
+CONVERSATION FLOW:
 1. Pehla message → Warmly greet + NAAM POOCHHO
-2. Naam mila → "Nice to meet you [naam]! 😊" + kya jaanna chahte ho poochho
-3. Interest show kare → Demo class offer karo
-4. Price pooche → Batao aur value explain karo
-5. Ready ho → Enrollment process batao
-6. Not interested → Politely accept karo
+2. Naam mila → "Nice to meet you [naam]! 😊" + kya chahiye poochho
+3. Product/price interest → Exact details batao, grade explain karo
+4. Bulk order mention kare → Special pricing discuss karo
+5. Quote chahiye → Batao ki call pe better quote milega
+6. Ready ho → Order process batao
+7. Not interested → Politely accept karo
 
 Agar koi STOP/nahi/mat/band/no/not interested likhe → sirf ek word: DND"""
 
@@ -151,8 +175,9 @@ def get_sentiment(message):
     msg = message.lower()
     positive_words = [
         "haan", "yes", "interested", "chahiye", "batao",
-        "demo", "join", "enroll", "kab", "kaisa", "details",
-        "price", "cost", "kitna", "bata", "okay", "ok", "sure"
+        "order", "kitna", "price", "rate", "quote", "bulk",
+        "kab", "kaisa", "details", "bata", "okay", "ok", "sure",
+        "lena", "chahta", "supply", "delivery"
     ]
     negative_words = [
         "nahi", "nhi", "no", "stop", "mat", "band",
@@ -166,32 +191,27 @@ def get_sentiment(message):
 
 
 def extract_name_from_message(phone, user_message):
-    """
-    Conversation history check karo — agar AI ne naam pucha tha
-    aur client ne short reply diya toh wo naam hai
-    """
     if phone not in conversations:
         return None
 
     history = conversations[phone]
 
-    # Agar 2-4 messages hain — naam pucha gaya hoga
     if len(history) >= 2:
         last_bot_msg = None
-        for msg in reversed(history[:-1]):  # Latest bot message dhundo
+        for msg in reversed(history[:-1]):
             if msg["role"] == "assistant":
                 last_bot_msg = msg["content"].lower()
                 break
 
         if last_bot_msg and any(w in last_bot_msg for w in
                                 ["naam", "name", "aapka naam", "your name",
-                                 "introduce", "bataiye", "kaun"]):
-            # Client ka reply naam ho sakta hai
+                                 "introduce", "bataiye", "kaun", "apna naam"]):
             words = user_message.strip().split()
             skip_words = [
                 "haan", "nahi", "nhi", "yes", "no", "okay", "ok",
-                "hello", "hi", "hey", "kya", "hai", "kaise", "demo",
-                "price", "kitna", "bata", "classes", "join"
+                "hello", "hi", "hey", "kya", "hai", "kaise",
+                "price", "kitna", "bata", "rate", "tmt", "steel",
+                "order", "bulk", "delivery", "ajmer"
             ]
             if (len(words) <= 3 and
                     not any(w in user_message.lower() for w in skip_words)):
@@ -305,7 +325,6 @@ def handle_message():
             print(f"🚫 DND — ignoring {phone}")
             return jsonify({"status": "ok"}), 200
 
-        # Naam extract karo reply se pehle
         name = extract_name_from_message(phone, user_message)
         if name:
             client_names[phone] = name
@@ -337,7 +356,7 @@ def handle_message():
 @app.route("/", methods=["GET"])
 def home():
     return """
-    <h2>🤖 Aero WhatsApp Bot</h2>
+    <h2>🤖 TMT Ajmer WhatsApp Bot</h2>
     <p>Status: <b style='color:green'>Running</b></p>
     <p>Webhook: /webhook</p>
     """, 200
@@ -346,7 +365,7 @@ def home():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*50)
-    print("🚀 AERO WHATSAPP BOT STARTING...")
+    print("🚀 TMT AJMER BOT STARTING...")
     print("="*50)
     print(f"📡 Port: {port}")
     print(f"🔑 Verify Token: {VERIFY_TOKEN}")
