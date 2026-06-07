@@ -1,0 +1,9 @@
+flask
+anthropic
+gspread
+google-auth
+requests
+watchdog
+python-docx
+openpyxl
+gunicorn

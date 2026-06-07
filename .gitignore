@@ -1,0 +1,15 @@
+# Secrets — never commit these
+config.py
+*.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Uploads temp folder
+uploads/
+
+# OS
+.DS_Store
+Thumbs.db
